@@ -6,9 +6,12 @@ from schemas.question import Question, QuestionStatus
 from schemas.research_job import ResearchJob
 import models.question
 import models.research_job
+from controller.llm.answer import get_answer_from_llm
+from schemas.answer import Answer
 
 
-async def get_all_research_done(question : Question) -> ResearchJob:
+
+async def get_all_research_done(question : Question) -> ResearchJob | None:
     # runs as a background task after the response is sent, so it needs its own session
     db = session()
     try:
@@ -21,18 +24,44 @@ async def get_all_research_done(question : Question) -> ResearchJob:
         except Exception:
             db.rollback()
             raise
-
+        # each source gets its own 5s limit; a slow or failing one is skipped, the rest still count
         result = await asyncio.gather(
-    search_web(question=question.question),
-    search_documentation(question=question.question),
-    search_knowledge_base(question=question.question)
+            asyncio.wait_for(search_web(question=question.question), 5),
+            asyncio.wait_for(search_documentation(question=question.question), 5),
+            asyncio.wait_for(search_knowledge_base(question=question.question), 5),
+            return_exceptions=True,
         )
+        result = [r for r in result if not isinstance(r, BaseException)]
+
+        if not result:
+            try:
+                db.query(models.question.Question).filter(models.question.Question.id == question.id).update(
+                    {models.question.Question.status: QuestionStatus.FAILED}
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            return None
+
+        try:
+            answer_from_llm = await asyncio.wait_for(get_answer_from_llm(question.question, result), 6)
+        except Exception:
+            try:
+                db.query(models.question.Question).filter(models.question.Question.id == question.id).update(
+                    {models.question.Question.status: QuestionStatus.FAILED}
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            return None
 
         research_job = ResearchJob(
             id=question.id,
             question=question.question,
-            summary="\n".join(result),
-            confidence=0.85,
+            summary=answer_from_llm.summary,
+            confidence=answer_from_llm.confidance,
             created_at=created_at,
             completed_at=datetime.now(timezone.utc),
         )

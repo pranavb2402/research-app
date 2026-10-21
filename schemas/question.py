@@ -6,6 +6,7 @@ class QuestionStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in-progress"
     COMPLETED="completed"
+    FAILED="failed"
 
 class Question(BaseModel):
     id: UUID
