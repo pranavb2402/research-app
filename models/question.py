@@ -14,3 +14,5 @@ class Question(Base):
         Enum(QuestionStatus, values_callable=lambda e: [m.value for m in e]),
         default=QuestionStatus.PENDING,
     )
+    error_type = Column(String, nullable=True)
+    error_description = Column(String, nullable=True)
